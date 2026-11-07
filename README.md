@@ -1,5 +1,7 @@
 # 地震数据智能去噪（dsh-seismic-denoise）
 
+GitHub: <https://github.com/YH-QSH/dsh-seismic-denoise>
+
 给 DSH 加一套「地震勘探数据去噪工作流」：读取任意常见地震数据 → 判断来源与噪声 → 自主选方法 → 去噪 → 质量门禁 → 整理成果 + Word 报告。
 
 ## 安装
