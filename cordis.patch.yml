@@ -1,0 +1,3 @@
+- insert:
+    - id: seismic-denoise
+      name: 'dsh-seismic-denoise'

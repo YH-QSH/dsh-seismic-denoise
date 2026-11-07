@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Seismic Denoise">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#062a4a"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#a7f3d0"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <g fill="none" stroke="url(#wave)" stroke-linecap="round">
+    <path d="M12 66 C22 66 24 58 30 58 S38 74 44 74 52 50 60 50 68 82 76 82 84 46 92 46 100 62 108 62 114 66 116 66" stroke-width="5"/>
+    <path d="M18 88 C28 88 30 82 36 82 S44 94 50 94 58 76 64 76 72 96 80 96 88 70 96 70 104 86 110 86" stroke-width="2.5" opacity=".55"/>
+    <path d="M18 44 C28 44 30 38 36 38 S44 50 50 50 58 32 64 32 72 52 80 52 88 30 96 30 104 42 110 42" stroke-width="2.5" opacity=".55"/>
+  </g>
+  <circle cx="100" cy="28" r="9" fill="#a7f3d0" opacity=".9"/>
+  <circle cx="100" cy="28" r="16" fill="none" stroke="#a7f3d0" stroke-width="2" opacity=".35"/>
+</svg>

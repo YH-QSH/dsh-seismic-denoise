@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Seismic Denoise",
+    "description": "Read seismic data in SEG-Y/MAT/HDF5 and more, infer acquisition context and noise, choose a denoising method, gate on quality, then package results with a Word report."
+  }
+}

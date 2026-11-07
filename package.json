@@ -1,0 +1,30 @@
+{
+  "name": "dsh-seismic-denoise",
+  "version": "0.1.0",
+  "private": true,
+  "description": "地震波勘探数据智能去噪：读取任意格式、来源匹配、自主选方法、质量门禁、Word 报告",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YH-QSH/dsh-seismic-denoise.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "engine",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
