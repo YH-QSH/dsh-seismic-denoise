@@ -2,7 +2,7 @@
 
 GitHub: <https://github.com/YH-QSH/dsh-seismic-denoise>
 
-版本：`0.1.2`
+版本：`0.1.3`
 
 给 DSH 加一套「地震勘探数据去噪工作流」：读取任意常见地震数据 → 先预览来源/是否需去噪并询问 → 自主选单方法或组合 → 去噪 → 质量门禁 → 整理成果 + Word 报告。
 
@@ -126,6 +126,13 @@ python -m engine.cli auto --input "真实地震数据\whataroa_0_hDVS_2239.segy"
 ```
 
 ## 改动
+
+### 0.1.3（2026-11-08，P2 UQ）
+
+- **判断层 UQ 升级**：有纯净参考时，`metrics.evaluate` 按道做 400 次 bootstrap，估计参考增益的 5%–95% 区间；`ensemble_uq(..., best=...)` 优先使用该区间，不再因为“只有 1 个门禁通过候选”而直接 unavailable。
+- **证据卡更稳**：接受判断仍看参考增益点估计，但若 UQ 区间下界低于 0.5dB，改为 `conditional`，不再无条件 `accept`。
+- 实测 02 随机+参考：F-X 2.907dB，UQ `n=180`、区间 2.823–2.988dB、reliable；`seismic_judge` 返回 `accept`。
+- 测试：judgment 7/7。
 
 ### 0.1.2（2026-11-08，调整阶段）
 

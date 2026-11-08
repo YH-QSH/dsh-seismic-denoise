@@ -152,7 +152,7 @@ def run_case(
     specs = plan(assessment, cfg=stage3_cfg)
     results = run_attempts(ds, specs, cfg=stage3_cfg, reference=ref, log=lambda *a, **k: None)
     best = pick_best(results)
-    uq = ensemble_uq(results, confidence=float(config["uq"]["confidence"]))
+    uq = ensemble_uq(results, confidence=float(config["uq"]["confidence"]), best=best)
     evidence = build_evidence(best, card, uq, cfg=config)
 
     attempts = [_result_summary(r) for r in results]

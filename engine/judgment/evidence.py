@@ -149,7 +149,7 @@ def build_evidence(
         if uq_available:
             uq_low = _finite(uq.gain_ci_low)
         ref_ok = ref_gain is not None and ref_gain >= float(config["min_reference_gain_db"])
-        unstable = bool(uq_available and uq_reliable and uq_low is not None
+        unstable = bool(uq_available and uq_low is not None
                         and uq_low < float(config["min_reference_gain_db"]))
         if ref_ok and not unstable:
             decision = "accept"

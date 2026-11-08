@@ -1,6 +1,6 @@
 {
   "name": "dsh-seismic-denoise",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "地震波勘探数据智能去噪：读取任意格式、来源匹配、自主选方法/组合、质量门禁、AI 判断层、Word 报告",
   "repository": {

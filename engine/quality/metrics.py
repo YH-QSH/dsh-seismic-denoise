@@ -384,6 +384,50 @@ def _safe_pearson(x: np.ndarray, y: np.ndarray) -> float | None:
     return float(np.clip(np.dot(x, y) / den, -1.0, 1.0))
 
 
+def _bootstrap_reference_gain(noisy: np.ndarray, denoised: np.ndarray,
+                              reference: np.ndarray, *, n_boot: int = 400,
+                              seed: int = 20261108) -> dict | None:
+    """按道重采样估计参考增益的置信区间。
+
+    参考增益是“输入误差 / 输出去噪误差”的全局比值；对道做 bootstrap
+    可以回答“换一批道，这个增益还稳不稳”，比只看多个方法的离散度更贴近
+    实际验收。返回 5%/95% 分位、标准差和样本数，供 UQ 层直接使用。
+    """
+    a = np.asarray(noisy, dtype=np.float64)
+    d = np.asarray(denoised, dtype=np.float64)
+    r = np.asarray(reference, dtype=np.float64)
+    if a.shape != d.shape or a.shape != r.shape or a.ndim != 2:
+        return None
+    ntr = int(a.shape[1])
+    if ntr < 20 or n_boot < 50:
+        return None
+    se_in = np.mean((a - r) ** 2, axis=0)
+    se_out = np.mean((d - r) ** 2, axis=0)
+    valid = np.isfinite(se_in) & np.isfinite(se_out)
+    if int(valid.sum()) < 20:
+        return None
+    se_in = np.maximum(se_in[valid], 1e-30)
+    se_out = np.maximum(se_out[valid], 1e-30)
+    n = int(se_in.size)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(int(n_boot), n))
+    mi = se_in[idx].mean(axis=1)
+    mo = se_out[idx].mean(axis=1)
+    gains = 10.0 * np.log10(mi / mo)
+    gains = gains[np.isfinite(gains)]
+    if gains.size < 50:
+        return None
+    lo, hi = np.percentile(gains, [5.0, 95.0])
+    return {
+        "low_db": round(float(lo), 3),
+        "high_db": round(float(hi), 3),
+        "std_db": round(float(np.std(gains, ddof=1)), 3),
+        "n_boot": int(gains.size),
+        "n_traces": n,
+        "method": "trace_bootstrap",
+    }
+
+
 # --------------------------------------------------------------------------
 # 主评价入口
 # --------------------------------------------------------------------------
@@ -605,6 +649,9 @@ def evaluate(noisy: np.ndarray, denoised: np.ndarray, dt: float,
                 ref_out = float(10.0 * math.log10(p_ref / max(err_out, floor)))
                 ref_gain = ref_out - ref_in
                 extra["reference_power_db"] = round(_db(p_ref), 3)
+                boot = _bootstrap_reference_gain(a, d, r)
+                if boot is not None:
+                    extra["reference_gain_bootstrap"] = boot
 
     if dz is not None:
         extra["dz"] = float(dz)

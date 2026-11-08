@@ -105,6 +105,28 @@ def test_abstain_on_ood():
     assert "ood_high" in ev.flags
 
 
+def test_trace_bootstrap_uq_prefers_interval():
+    best = fake_result(ref=2.0)
+    best.metrics.extra["reference_gain_bootstrap"] = {
+        "low_db": 1.5, "high_db": 2.5, "std_db": 0.3,
+        "n_boot": 400, "n_traces": 100, "method": "trace_bootstrap",
+    }
+    uq = ensemble_uq([best], best=best)
+    assert uq.available is True
+    assert uq.method == "trace_bootstrap"
+    assert uq.gain_ci_low == 1.5 and uq.gain_ci_high == 2.5
+    assert uq.reliable is True
+
+    weak = fake_result(ref=2.0)
+    weak.metrics.extra["reference_gain_bootstrap"] = {
+        "low_db": 0.2, "high_db": 2.5, "std_db": 0.9,
+        "n_boot": 400, "n_traces": 100, "method": "trace_bootstrap",
+    }
+    ev = build_evidence(weak, card(has_ref=True), ensemble_uq([weak], best=weak))
+    assert ev.decision == "conditional"
+    assert "UQ 下界不足" in " ".join(ev.reasons)
+
+
 def test_reference_close_detects_identity():
     rng = np.random.default_rng(0)
     a = rng.normal(size=(100, 20)).astype(np.float32)

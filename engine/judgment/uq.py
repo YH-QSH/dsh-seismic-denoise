@@ -55,8 +55,58 @@ def _get_weak(metrics) -> float | None:
     return value if np.isfinite(value) else None
 
 
-def ensemble_uq(results, confidence: float = 0.90, only_passed: bool = True) -> UQReport:
-    """对候选结果做异构集成；默认只统计通过门禁的候选，避免失败候选把离散度拉爆。"""
+def _bootstrap_from_best(best) -> UQReport | None:
+    """优先使用最佳候选的“按道 bootstrap”参考增益区间。
+
+    这比“多方法离散度”更贴近真实验收：它回答的是“换一批道，这个
+    去噪增益还稳不稳”。只有最佳候选有参考增益且门禁通过时才使用。
+    """
+    if best is None:
+        return None
+    gate = getattr(best, "gate", None)
+    if gate is None or not bool(getattr(gate, "passed", False)):
+        return None
+    metrics = getattr(best, "metrics", None)
+    extra = getattr(metrics, "extra", None) or {}
+    boot = extra.get("reference_gain_bootstrap") or {}
+    gain, source = _get_gain(metrics)
+    if gain is None or source != "reference":
+        return None
+    try:
+        low = float(boot["low_db"])
+        high = float(boot["high_db"])
+        std = float(boot["std_db"])
+        n_traces = int(boot["n_traces"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (np.isfinite(low) and np.isfinite(high) and np.isfinite(std)):
+        return None
+    width = max(0.0, high - low)
+    reliable = bool(n_traces >= 20 and width <= 2.0)
+    notes = [f"按道 bootstrap {int(boot.get('n_boot', 0))} 次，5%–95% 区间宽 {width:.2f} dB"]
+    if not reliable:
+        notes.append("区间宽度大于 2dB，增益稳定性不足")
+    return UQReport(
+        available=True,
+        method="trace_bootstrap",
+        n=n_traces,
+        gain_mean_db=float(gain),
+        gain_std_db=std,
+        gain_ci_low=low,
+        gain_ci_high=high,
+        reliable=reliable,
+        source="reference_trace_bootstrap",
+        notes=notes,
+    )
+
+
+def ensemble_uq(results, confidence: float = 0.90, only_passed: bool = True,
+                best=None) -> UQReport:
+    """对候选结果做异构集成；有按道 bootstrap 时优先使用。"""
+    boot = _bootstrap_from_best(best)
+    if boot is not None:
+        return boot
+
     all_results = list(results or [])
     selected = all_results
     filter_note: list[str] = []
