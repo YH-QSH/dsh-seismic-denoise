@@ -13,7 +13,7 @@ from pathlib import Path
 from .model import to_jsonable
 from .pipeline import (
     DEFAULT_CFG, assess_flow, auto_flow, denoise_flow, finalize_flow,
-    inspect_flow, merge_cfg,
+    inspect_flow, merge_cfg, preview_flow,
 )
 from .utils import Logger, read_json, write_json
 
@@ -63,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("assess", help="来源匹配与数据诊断")
     _common(p)
     p.add_argument("--workdir", required=True)
+
+    p = sub.add_parser("preview", help="上传后先读取+来源匹配，返回来源/是否需去噪并等待确认")
+    _common(p, input_required=True)
+    p.add_argument("--workdir", default=None, help="复用已有成果文件夹")
 
     p = sub.add_parser("denoise", help="规划并执行去噪，做质量门禁")
     _common(p)
@@ -135,6 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         if stage == "inspect":
             result = inspect_flow(args.input, args.workdir, args.root,
                                   args.max_traces, log=None)
+        elif stage == "preview":
+            result = preview_flow(args.input, args.workdir, args.root,
+                                  args.max_traces, cfg=_cfg(args), log=None)
         elif stage == "assess":
             result = assess_flow(args.workdir, _cfg(args), log=None)
         elif stage == "denoise":

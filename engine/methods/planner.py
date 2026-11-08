@@ -165,9 +165,16 @@ def _filter_keys(keys: list[str], cfg: dict, planner: dict) -> list[str]:
 
 
 def _combo_spec(keys: list[str], cfg: dict, why: str,
-                *, source: str = "combo", strength: float = 0.9) -> MethodSpec:
-    """把一组方法 key 变成一条组合 MethodSpec（参数用各自默认值）。"""
+                *, source: str = "combo", strength: float = 0.9,
+                overrides: dict[str, dict] | None = None) -> MethodSpec:
+    """把一组方法 key 变成一条组合 MethodSpec。
+
+    ``overrides`` 用于按数据域微调某个阶段的参数；不改变链结构。
+    """
     chain = [{"key": k, "params": _method_params(k, cfg)} for k in keys]
+    if overrides:
+        for stage in chain:
+            stage["params"].update(overrides.get(stage["key"], {}))
     targets: list[str] = []
     for k in keys:
         for t in _METHOD_TARGETS.get(k, []):
@@ -184,6 +191,24 @@ def _combo_spec(keys: list[str], cfg: dict, why: str,
         priority=0,
         source=source,
     )
+
+
+def _combo_param_overrides(keys: list[str], assessment) -> dict[str, dict] | None:
+    """按数据域给 FK→带通 组合微调参数。
+
+    合成/真实数据试验显示：
+    - 地面地震：短 taper 保留近炮检细节，5 Hz 低截；
+    - 被动源：更强的低速压制（taper 600），7 Hz 低截，减少低频泄漏。
+    带通 order=2 在保持弱信号的同时降低振铃，是阶段五的权值优化点。
+    """
+    if keys != ["fk", "bandpass"]:
+        return None
+    domain = str(getattr(assessment, "domain", "") or "")
+    passive = ("被动" in domain) or ("passive" in domain.lower())
+    return {
+        "fk": {"vmin": 1200.0, "taper": 600.0 if passive else 400.0},
+        "bandpass": {"f_lo": 7.0 if passive else 5.0, "f_hi": 90.0, "order": 2},
+    }
 
 
 def _combo_candidates(assessment, cfg: dict, planner: dict,
@@ -240,7 +265,10 @@ def _combo_candidates(assessment, cfg: dict, planner: dict,
     out: list[MethodSpec] = []
     seen: set[str] = set()
     for keys, why in raw:
-        spec = _combo_spec(keys, cfg, why, source="combo")
+        spec = _combo_spec(
+            keys, cfg, why, source="combo",
+            overrides=_combo_param_overrides(keys, assessment),
+        )
         fp = _freeze({"key": spec.key, "params": spec.params})
         if fp in seen:
             continue

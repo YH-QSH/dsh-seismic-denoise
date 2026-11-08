@@ -2,9 +2,9 @@
 
 GitHub: <https://github.com/YH-QSH/dsh-seismic-denoise>
 
-版本：`0.1.1`
+版本：`0.1.2`
 
-给 DSH 加一套「地震勘探数据去噪工作流」：读取任意常见地震数据 → 判断来源与噪声 → 自主选方法 → 去噪 → 质量门禁 → 整理成果 + Word 报告。
+给 DSH 加一套「地震勘探数据去噪工作流」：读取任意常见地震数据 → 先预览来源/是否需去噪并询问 → 自主选单方法或组合 → 去噪 → 质量门禁 → 整理成果 + Word 报告。
 
 ## 安装
 
@@ -19,18 +19,22 @@ GitHub: <https://github.com/YH-QSH/dsh-seismic-denoise>
 
 | 工具 | 作用 |
 | --- | --- |
-| `seismic_auto` | 一键全流程（推荐） |
+| `seismic_preview` | 上传后第一步：读取+来源匹配，给出“是否需去噪/建议方法”，等待确认 |
+| `seismic_auto` | 用户确认后，一键全流程 |
 | `seismic_read` | 读取文件、解析道头、生成总览/频谱/F-K/道头图 |
 | `seismic_assess` | 来源匹配、噪声诊断、判断是否需要去噪 |
 | `seismic_denoise` | 规划并执行去噪，做 SNR/能量/泄漏/谱相关门禁，不达标自动重试 |
 | `seismic_finalize` | 整理文件、写清单/说明/Word 报告 |
 | `seismic_methods` | 列可用方法、门禁阈值、CNN/GPU 状态 |
+| `seismic_judge` | 第四阶段判断层：accept / conditional / reject / abstain，只读判断、不生成报告 |
 
 典型对话：
 
 > 帮我把 `C:\data\line1.sgy` 去噪，出个报告。
 
-AI 会调用 `seismic_auto`，最后给出成果文件夹和 Word 报告路径。
+AI 会先调用 `seismic_preview`：只读取并做来源匹配，把“数据来源、置信度、是否需要去噪、建议方法”返回给你，并问是否继续。你确认后才调用 `seismic_auto`，最后给出成果文件夹和 Word 报告路径；不确认不会消耗后续去噪与报告生成的 token。
+
+“先预览再确认”是默认流程：`seismic_preview` 不会去噪、不会写报告，只生成 02 阶段的读取/来源图；确认后再 `seismic_auto`。CLI 对应 `python -m engine.cli preview --input ...`。
 
 有纯净参考数据时，把参考路径一起传给 `seismic_auto`/`seismic_denoise`（工具参数 `reference`，或 CLI 的 `--reference`）：主流程会用它计算真实 SNR 增益、选择最佳方法，并拒绝“看起来通过、实际变差”的结果；输入与参考几乎一致时会直接判为无需去噪。
 
@@ -122,6 +126,13 @@ python -m engine.cli auto --input "真实地震数据\whataroa_0_hDVS_2239.segy"
 ```
 
 ## 改动
+
+### 0.1.2（2026-11-08，调整阶段）
+
+- **先预览再确认**：新增 `seismic_preview` 工具与 `preview` CLI；上传后只读取+来源匹配，返回来源、置信度、是否需去噪、建议方法与 02 图，不进入去噪/报告；确认后才 `seismic_auto`/`seismic_denoise`。预检返回的读取摘要已裁剪道头全表，减少 token。
+- **组合权重微调**：对 `FK→带通` 组合按数据场景覆盖参数——地面地震 `FK taper=400 + 带通 5–90 Hz order=2`，被动源/微震 `FK taper=600 + 带通 7–90 Hz order=2`；12 例无 CNN 回归 10/12 通过，01 参考增益 2.586→**2.831 dB**，11 2.860→**3.616 dB**，其余通过案例保持 2.33–7.42 dB。
+- **批量脚本修复**：`批量去噪.py` 的相对 `--out/--csv` 现在按调用时工作目录解析，避免在插件目录下生成空 job；便于在工作区根目录做回归。
+- 测试：formats 9/9、methods 15/15、quality 13/13、reporting 通过、judgment 6/6。
 
 ### 0.1.1（2026-11-08，框架升级阶段）
 

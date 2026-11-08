@@ -209,6 +209,64 @@ def assess_flow(job_dir: str | Path, cfg: dict | None = None,
     }
 
 
+def preview_flow(input_path: str | Path, workdir: str | Path | None = None,
+                 root: str | Path | None = None, max_traces: int | None = None,
+                 cfg: dict | None = None,
+                 log: Callable[[str], None] | None = None) -> dict:
+    """读取 + 来源匹配，停在“是否继续”这一步，不进入去噪。
+
+    用户上传文件后先看来源、置信度、是否需要去噪与建议方法；确认后再走
+    ``auto_flow``/``denoise_flow``，避免未经确认就消耗大量 token。
+    """
+    t0 = time.time()
+    read = inspect_flow(input_path, workdir, root, max_traces, log)
+    if not read.get("ok"):
+        return read
+    job_dir = read["workdir"]
+    assessed = assess_flow(job_dir, cfg, log=log)
+    source = assessed.get("source") or {}
+    needs = bool(assessed.get("needs_denoise"))
+    domain = source.get("domain") or "未知"
+    acquisition = source.get("acquisition") or "未知"
+    confidence = float(source.get("confidence") or 0.0)
+    recommended = "、".join(source.get("recommended") or []) or "自动规划"
+    if needs:
+        next_action = "先询问用户是否继续去噪；确认后调用 seismic_auto 或 seismic_denoise。"
+    else:
+        next_action = "先询问用户是否整理报告；确认后调用 seismic_finalize，或直接结束。"
+    message = (
+        f"数据来源：{domain} / {acquisition}（置信度 {confidence * 100:.0f}%）。"
+        f"是否需要去噪：{'是' if needs else '否'}。"
+        f"建议方法：{recommended}。{next_action}"
+    )
+    ds_info = read.get("dataset") or {}
+    read_brief = {
+        "stage": "read",
+        "workdir": job_dir,
+        "dataset": {k: ds_info.get(k) for k in (
+            "path", "format", "n_samples", "n_traces", "dt_ms", "dz_m",
+            "duration_s", "confidence", "source_kind",
+        )},
+        "artifacts": read.get("artifacts") or {},
+        "repairs": read.get("repairs") or [],
+        "warnings": read.get("warnings") or [],
+        "message": read.get("message", ""),
+    }
+    return {
+        "ok": True,
+        "stage": "preview",
+        "workdir": job_dir,
+        "read": read_brief,
+        "assess": assessed,
+        "source": source,
+        "needs_denoise": needs,
+        "needs_confirmation": True,
+        "next_action": next_action,
+        "message": message,
+        "elapsed_s": round(time.time() - t0, 2),
+    }
+
+
 def _load_reference(path: str | Path, ds: SeismicDataset, log) -> np.ndarray:
     from .formats import read_any
     ref_ds = read_any(path)
