@@ -26,6 +26,8 @@ DEFAULT_CFG: dict[str, Any] = {
         "energy_ratio_min": 0.60,
         "energy_ratio_max": 1.05,
         "signal_leakage_max": 0.40,
+        "leakage_max_ref": 0.45,
+        "min_reference_gain_db": 0.5,
         "spectrum_corr_min": 0.80,
         "clip_ratio_max": 1e-3,
         "snr_out_min_db": 10.0,
@@ -217,6 +219,25 @@ def _load_reference(path: str | Path, ds: SeismicDataset, log) -> np.ndarray:
     return ref
 
 
+def _reference_close(ds: SeismicDataset, reference: str | Path, log) -> bool:
+    """输入与纯净参考几乎相同时，直接判为无需去噪（参考数据专用短路）。"""
+    try:
+        ref = _load_reference(reference, ds, log)
+    except Exception as exc:
+        log(f"参考数据无法用于干净判断：{exc}")
+        return False
+    x = np.asarray(ds.data, dtype=np.float32)
+    a = x.ravel().astype(np.float64)
+    b = np.asarray(ref, dtype=np.float64).ravel()
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom <= 0:
+        return False
+    corr = float(np.dot(a, b) / denom)
+    rel = float(np.sqrt(np.mean((x - ref) ** 2)) / (np.sqrt(np.mean(x ** 2)) + 1e-12))
+    log(f"参考一致性：corr={corr:.6f}，相对差异={rel:.4f}")
+    return corr >= 0.995 and rel <= 0.02
+
+
 def _user_specs(methods: str | list[str], cfg: dict) -> list[MethodSpec]:
     keys = methods if isinstance(methods, list) else [m.strip() for m in str(methods).split(",") if m.strip()]
     from .methods.classical import available_methods
@@ -348,6 +369,7 @@ def denoise_flow(job_dir: str | Path, cfg: dict | None = None,
     if not state:
         raise FileNotFoundError(f"{job_dir} 下没有任务状态，请先调用 seismic_read")
     cfg = merge_cfg(DEFAULT_CFG, cfg)
+    cfg["allow_cnn"] = bool(allow_cnn)
     if max_attempts:
         cfg["max_attempts"] = int(max_attempts)
     if not state.get("source"):
@@ -384,7 +406,15 @@ def denoise_flow(job_dir: str | Path, cfg: dict | None = None,
         repaired = state.get("dataset", {}).get("preprocess", {}).get("bad_traces_repaired") or []
         if not repaired:
             return items
-        kept = [s for s in items if s.key != "fx_decon"]
+        def _has_fx(spec) -> bool:
+            if getattr(spec, "key", "") == "fx_decon":
+                return True
+            if getattr(spec, "key", "") == "combo":
+                chain = (getattr(spec, "params", None) or {}).get("chain") or []
+                return any(str(s.get("key")) == "fx_decon" for s in chain)
+            return False
+
+        kept = [s for s in items if not _has_fx(s)]
         if len(kept) != len(items):
             log("检测到坏道修复：自动规划跳过 F-X，避免修复边界产生垂直条带")
             state["plan_note"] = "检测到坏道修复，已跳过 F-X（避免垂直条带）"
@@ -555,6 +585,22 @@ def auto_flow(input_path: str | Path, workdir: str | Path | None = None,
     read = inspect_flow(input_path, job_dir, max_traces=None, log=log)
     assess = assess_flow(job_dir, cfg, log=log)
     state = load_state(job_dir) or {}
+    # 有纯净参考且输入与参考几乎一致时，说明这份数据本身就是干净参考；
+    # 不应因为盲 SNR 估计器把相干强能量当“高 SNR”而误判后继续去噪。
+    if reference and assess.get("needs_denoise"):
+        ds = load_dataset(job_dir)
+        if ds is not None and _reference_close(ds, reference, log):
+            src = state.get("source") or assess.get("source") or {}
+            src["needs_denoise"] = False
+            src["clean_reasons"] = ["输入与提供的纯净参考几乎一致（参考一致性检查）"]
+            src["cleanliness"] = dict(src.get("cleanliness") or {})
+            src["cleanliness"]["reference_match"] = True
+            state["source"] = src
+            state["needs_denoise"] = False
+            save_state(job_dir, state)
+            assess["needs_denoise"] = False
+            assess["source"] = src
+            assess["message"] = "输入与纯净参考几乎一致，判定为无需去噪。"
     if not assess["needs_denoise"]:
         fin = finalize_flow(job_dir, force=False, log=log)
         return {

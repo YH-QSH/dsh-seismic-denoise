@@ -20,6 +20,8 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "energy_min": 0.60,         # 硬：信号带内能量保持下限（高保真，防削光）
     "energy_max": 1.05,         # 硬：信号带内能量保持上限（防放大）
     "max_signal_leakage": 0.40,  # 硬：被去除分量与输出局部相关的上限
+    "max_signal_leakage_ref": 0.45,  # 有纯净参考时的泄漏上限（短/高频数据更宽容）
+    "min_reference_gain_db": 0.5,    # 有纯净参考时的真实 SNR 增益下限
     "min_spectrum_corr": 0.80,   # 硬：信号带振幅谱相关下限
     "max_clip_ratio": 1e-3,     # 硬：额外削波样点比例上限
     "min_snr_out_db": 10.0,     # 软（盲估计不可靠时）：输出绝对 SNR
@@ -35,6 +37,8 @@ _ALIASES: dict[str, str] = {
     "energy_ratio_min": "energy_min",
     "energy_ratio_max": "energy_max",
     "signal_leakage_max": "max_signal_leakage",
+    "leakage_max_ref": "max_signal_leakage_ref",
+    "min_reference_gain_db": "min_reference_gain_db",
     "spectrum_corr_min": "min_spectrum_corr",
     "clip_ratio_max": "max_clip_ratio",
     "snr_out_min_db": "min_snr_out_db",
@@ -191,6 +195,24 @@ def industry_gate(metrics: QualityMetrics | None,
             failures.append(f"信噪比增益 {float(snr_gain):.2f} dB 低于最低要求 {th['min_snr_gain_db']:.1f} dB")
             advice.append("提高去噪强度：加大滤波/预测强度、提高 cnn alpha，或叠加第二种方法")
 
+    # ---- 2b) 纯净参考的真实 SNR 增益（有参考时硬） ----
+    ref_gain = getattr(metrics, "reference_gain_db", None)
+    if ref_gain is not None:
+        try:
+            rg = float(ref_gain)
+        except (TypeError, ValueError):
+            rg = None
+        if rg is not None and math.isfinite(rg):
+            ok = rg >= th["min_reference_gain_db"]
+            note = ("参考 SNR 增益达标" if ok else
+                    f"相对纯净参考反而下降 {abs(rg):.2f} dB，去噪伤及有效信号")
+            checks.append(GateCheck("参考 SNR 增益", round(rg, 3),
+                                    f">={th['min_reference_gain_db']:.1f} dB", ok, note))
+            if not ok:
+                failures.append(
+                    f"参考 SNR 增益 {rg:.2f} dB 低于最低要求 {th['min_reference_gain_db']:.1f} dB")
+                advice.append("换更温和的方法/参数：降低过滤强度，保住有效波后再比较参考增益")
+
     # ---- 3) 能量保持（硬） ----
     if energy is None:
         checks.append(GateCheck("能量保持", None,
@@ -232,19 +254,22 @@ def industry_gate(metrics: QualityMetrics | None,
             advice.append("对弱有效波做保护：降低滤波/预测强度，或开启 fidelity 弱信号回注")
 
     # ---- 4) 信号泄漏（硬） ----
+    leak_limit = (th["max_signal_leakage_ref"]
+                  if getattr(metrics, "reference_gain_db", None) is not None
+                  else th["max_signal_leakage"])
     if leakage is None:
-        checks.append(GateCheck("信号泄漏", None, f"<={th['max_signal_leakage']:.2f}", True,
+        checks.append(GateCheck("信号泄漏", None, f"<={leak_limit:.2f}", True,
                                 "局部相关样本不足，本项跳过"))
         advice.append("信号泄漏不可算：建议用更长的数据或带参考的合成数据复核")
     else:
         lk = float(leakage)
-        ok = lk <= th["max_signal_leakage"]
+        ok = lk <= leak_limit
         note = ("被去除分量与有效波相关性低，信号保护良好" if ok else
                 "被去除分量里含有大量有效波成分，去噪伤及信号")
         checks.append(GateCheck("信号泄漏", round(lk, 4),
-                                f"<={th['max_signal_leakage']:.2f}", ok, note))
+                                f"<={leak_limit:.2f}", ok, note))
         if not ok:
-            failures.append(f"信号泄漏 {lk:.1%} 超过上限 {th['max_signal_leakage']:.0%}")
+            failures.append(f"信号泄漏 {lk:.1%} 超过上限 {leak_limit:.0%}")
             advice.append("缩窄去噪频带/慢度范围，优先保住同相轴；必要时降低 cnn alpha")
 
     # ---- 5) 频谱一致性（硬） ----

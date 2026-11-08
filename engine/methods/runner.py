@@ -59,6 +59,9 @@ def _execute(spec, data: np.ndarray, dt: float, dz: float | None):
     """调用对应方法，返回 (out, info)。"""
     params = dict(getattr(spec, "params", None) or {})
     key = getattr(spec, "key", "")
+    if key == "combo":
+        from .combo import run_chain
+        return run_chain(data, dt, dz, params.get("chain") or [])
     if key == "cnn":
         from .cnn import run_cnn
         return run_cnn(data, dt, dz, params)
@@ -243,7 +246,12 @@ def pick_best(results: list[MethodResult] | None) -> MethodResult | None:
         score = float(getattr(g, "score", 0.0) or 0.0)
         conf = float(getattr(g, "confidence", 0.0) or 0.0)
         rt = float(getattr(r, "runtime_s", 0.0) or 0.0)
-        return (score, conf, -rt)
+        # 有纯净参考时，真实参考 SNR 增益比盲估计分数更可信；优先用它排序。
+        ref = getattr(r.metrics, "reference_gain_db", None)
+        ref_key = float(ref) if ref is not None and math.isfinite(float(ref)) else None
+        return (1 if ref_key is not None else 0,
+                ref_key if ref_key is not None else -1e9,
+                score, conf, -rt)
 
     pool = passed if passed else valid
     return max(pool, key=_key)

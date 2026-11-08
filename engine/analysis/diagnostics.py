@@ -64,9 +64,9 @@ def spectral_stats(data: np.ndarray, dt: float) -> dict:
     line_score_best = max(line50, line60)
     line_hz = 50.0 if line50 >= line60 else 60.0
 
-    # 高频占比（>0.45 Nyquist 且 >60Hz）
+    # 高频占比（>60Hz；采样率太低时退到 Nyquist 的 95%）
     nyq = 1.0 / (2.0 * dt)
-    hf_lo = min(max(60.0, 0.45 * nyq), nyq * 0.95)
+    hf_lo = min(60.0, nyq * 0.95)
     hf_ratio = float(power[(f >= hf_lo)].sum() / total) if (f >= hf_lo).any() else 0.0
     lf_ratio = float(power[(f <= 8.0)].sum() / total) if (f <= 8.0).any() else 0.0
 
@@ -87,8 +87,10 @@ def spike_stats(data: np.ndarray) -> dict:
     x = _as_float(data)
     if x.size == 0:
         return {"spike_ratio": 0.0, "kurtosis": 0.0}
-    med = np.median(x, axis=0, keepdims=True)
-    mad = np.median(np.abs(x - med), axis=0, keepdims=True) + 1e-12
+    # 按“同一时刻的相邻道中值”找孤立尖峰；相干同相轴在相邻道同时出现，
+    # 不会被误判成尖刺（旧版按单道时间中值会把强面波算成 29% 尖刺）。
+    med = np.median(x, axis=1, keepdims=True)
+    mad = np.median(np.abs(x - med), axis=1, keepdims=True) + 1e-12
     z = np.abs(x - med) / (1.4826 * mad)
     spike_ratio = float((z > 8.0).mean())
     # 峰值因子，尖刺多时明显偏高
@@ -164,15 +166,27 @@ def noise_profile(data: np.ndarray, dt: float | None, dz: float | None = None) -
     adj = float(coh.get("adjacent_coherence", 0.0))
 
     # 0–1 打分，只用于排序，不是概率
-    surface = min(1.0, lf * 2.2) * (0.55 + 0.45 * adj)
+    # 面波：低频带 0–15Hz 为主，不需要强相干（真实面波常带频散、相邻道相干不稳定）
+    low_band = lf + 0.8 * float(spec.get("bands", {}).get("5-15Hz", 0.0))
+    surface = min(1.0, low_band * 1.8)
     random_n = min(1.0, hf * 3.0) * (0.65 + 0.35 * (1.0 - adj))
-    random_n = max(random_n, min(1.0, float(spike.get("spike_ratio", 0.0)) * 6.0))
-    line_n = line
-    # 散射/绕射：中频不连贯能量；这里用 15–60Hz 占比与低相干做弱代理
+    # 只有稀疏、空间孤立的异常样点才算“尖刺”；强相干同相轴不算。
+    # 占比 >5% 说明是成片强能量（面波/反射），不是尖刺。
+    spike_ratio = float(spike.get("spike_ratio", 0.0))
+    spike_n = 0.0 if spike_ratio > 0.05 else min(0.6, max(0.0, (spike_ratio - 0.002) / 0.01))
+    random_n = max(random_n, spike_n)
+    line_n = min(1.0, line * 2.5)
+    # 散射/绕射：中频、横向不连贯；权重调低，避免随机噪声中频段被误判
     mid = float(spec.get("bands", {}).get("15-30Hz", 0.0)) + float(spec.get("bands", {}).get("30-60Hz", 0.0))
-    scatter = min(1.0, mid * 1.2) * (0.35 + 0.65 * (1.0 - adj))
-    # 折射：低频、相干、线性同相轴；没有 f-k 线性度时给保守低分
-    refraction = min(1.0, lf * 1.5) * (0.4 + 0.6 * adj) * 0.55
+    scatter = min(1.0, mid * 0.7) * (0.35 + 0.65 * (1.0 - adj))
+    # 折射：低频、相干、早起能量强（初至）；没有 f-k 线性度时给保守分
+    early = 0.0
+    try:
+        e = x[: max(1, ns // 4)] ** 2
+        early = float(e.mean() / (np.mean(x ** 2) + 1e-15))
+    except Exception:
+        early = 0.0
+    refraction = min(1.0, low_band * 1.2) * (0.3 + 0.7 * adj) * (0.4 + 0.6 * min(1.0, early * 2.0))
 
     scores = {
         "面波": round(float(surface), 4),

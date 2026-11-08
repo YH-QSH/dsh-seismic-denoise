@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from engine.methods import classical, cnn, planner, runner  # noqa: E402
+from engine.methods import classical, cnn, combo, planner, runner  # noqa: E402
 from engine.model import MethodResult, MethodSpec, QualityMetrics, SourceAssessment  # noqa: E402
 from engine.quality.gate import industry_gate  # noqa: E402
 from engine.quality.metrics import evaluate  # noqa: E402
@@ -236,15 +236,21 @@ def test_plan_by_noise_type():
         noise_types={"面波": 0.8, "随机噪声": 0.5}, needs_denoise=True, confidence=0.7,
     )
     specs = planner.plan(assessment, {})
-    assert 1 <= len(specs) <= 4
+    assert 1 <= len(specs) <= 6
     keys = [s.key for s in specs]
     assert keys[0] in {"fk", "bandpass", "median"}, f"面波主噪声首选异常: {keys}"
-    assert set(keys) <= ALL_METHODS | {"cnn"}
-    for s in specs:
+    assert set(keys) <= ALL_METHODS | {"cnn", "combo"}
+    singles = [s for s in specs if s.key != "combo"]
+    assert 1 <= len(singles) <= 4
+    assert any(s.key == "combo" for s in specs), "应给出组合候选"
+    for s in singles:
         assert isinstance(s.params, dict) and s.params
         assert s.rationale
         assert isinstance(s.targets, list)
         assert s.source == "rule"
+    for s in specs:
+        if s.key == "combo":
+            assert isinstance(s.params.get("chain"), list) and len(s.params["chain"]) >= 2
 
     specs = planner.plan(SourceAssessment(noise_types={"工频干扰": 0.9}), {})
     assert specs and specs[0].key == "notch", f"工频主噪声应首选 notch: {[s.key for s in specs]}"
@@ -252,6 +258,9 @@ def test_plan_by_noise_type():
     specs = planner.plan(SourceAssessment(noise_types={"面波": 0.9}, needs_denoise=True),
                          {"allow_cnn": False})
     assert "cnn" not in [s.key for s in specs]
+    for s in specs:
+        if s.key == "combo":
+            assert all(stage.get("key") != "cnn" for stage in s.params.get("chain", []))
 
     assert planner.plan(SourceAssessment(needs_denoise=False), {}) == []
 
@@ -260,6 +269,28 @@ def test_plan_unknown_noise_falls_back():
     specs = planner.plan(SourceAssessment(noise_types={}), {})
     keys = [s.key for s in specs]
     assert keys[:2] == ["bandpass", "cnn"], f"未知噪声兜底方案异常: {keys}"
+
+
+def test_combo_run_chain():
+    rng = np.random.default_rng(7)
+    data = rng.normal(0.0, 1.0, size=(256, 32)).astype(np.float32)
+    out, info = combo.run_chain(data, 0.002, 10.0, [
+        {"key": "bandpass", "params": {"f_lo": 5, "f_hi": 80}},
+        {"key": "median", "params": {"kt": 3, "kx": 1}},
+    ])
+    assert out.shape == data.shape
+    assert out.dtype == np.float32
+    assert np.isfinite(out).all()
+    assert len(info["stages"]) == 2
+    assert info["params_used"]["chain"][0]["key"] == "bandpass"
+    assert " → " in info["notes"]
+
+    try:
+        combo.run_chain(data, 0.002, 10.0, [{"key": "bandpass"}])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("单阶段组合应被拒绝")
 
 
 def test_refine_changes_params_after_failure():

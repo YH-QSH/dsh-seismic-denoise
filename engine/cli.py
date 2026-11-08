@@ -95,6 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("methods", help="列出可用去噪方法与 CNN 状态")
     p.add_argument("--json-out", default=None)
 
+    p = sub.add_parser("judge", help="阶段四判断层：CaseCard + UQ + 证据卡（只读调用去噪引擎）")
+    _common(p, input_required=True)
+    p.add_argument("--reference", default=None, help="可选纯净参考数据")
+    p.add_argument("--max-methods", type=int, default=4, help="最多尝试方法数")
+    p.add_argument("--no-cnn", action="store_true", help="禁用 CNN 候选")
+
     return ap
 
 
@@ -102,6 +108,17 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     stage = args.stage
     try:
+        if stage == "judge":
+            from .judgment.orchestrator import run_case
+            case = run_case(
+                args.input,
+                args.reference,
+                max_methods=args.max_methods,
+                allow_cnn=not args.no_cnn,
+            )
+            result = {"ok": True, "stage": "judge", **case.to_dict()}
+            return _emit(result, args.json_out)
+
         if stage == "methods":
             from .methods.classical import available_methods
             from .methods.cnn import cnn_available

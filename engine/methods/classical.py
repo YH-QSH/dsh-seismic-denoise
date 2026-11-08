@@ -234,6 +234,12 @@ def _do_bandpass(a: np.ndarray, dt: float, p: dict, warnings: list[str]) -> tupl
     nyq = fs / 2.0
     f_lo = _num(p, "f_lo", 5.0, 0.5, 0.95 * nyq, warnings)
     f_hi = _num(p, "f_hi", 90.0, 1.0, 0.98 * nyq, warnings)
+    # 高频采样（超声/实验室）沿用 5–90 Hz 会几乎滤掉全部信号；按 Nyquist 自适应。
+    if nyq > 200.0 and f_lo <= 5.1 and f_hi <= 90.1:
+        f_lo = max(1.0, nyq * 0.02)
+        f_hi = min(0.98 * nyq, nyq * 0.45)
+        if warnings is not None:
+            warnings.append(f"高频采样：带通自适应为 {f_lo:.1f}–{f_hi:.1f} Hz")
     order = _num(p, "order", 4, 1, 8, warnings, integer=True)
     if f_lo >= f_hi * 0.9:
         warnings.append(f"带通上下限不合理（{f_lo}–{f_hi} Hz），跳过")

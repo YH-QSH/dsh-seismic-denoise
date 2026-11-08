@@ -16,6 +16,7 @@ import json
 import math
 
 from ..model import MethodSpec
+from .combo import combo_label
 
 # --------------------------------------------------------------------------
 # 方法元信息（与 classical.available_methods() 保持一致，规划器不 import 方法模块）
@@ -163,6 +164,94 @@ def _filter_keys(keys: list[str], cfg: dict, planner: dict) -> list[str]:
     return keys
 
 
+def _combo_spec(keys: list[str], cfg: dict, why: str,
+                *, source: str = "combo", strength: float = 0.9) -> MethodSpec:
+    """把一组方法 key 变成一条组合 MethodSpec（参数用各自默认值）。"""
+    chain = [{"key": k, "params": _method_params(k, cfg)} for k in keys]
+    targets: list[str] = []
+    for k in keys:
+        for t in _METHOD_TARGETS.get(k, []):
+            if t not in targets:
+                targets.append(t)
+    label = combo_label(chain)
+    return MethodSpec(
+        key="combo",
+        name=f"组合：{label}",
+        params={"chain": chain, "label": label},
+        rationale=why,
+        targets=targets,
+        strength=strength,
+        priority=0,
+        source=source,
+    )
+
+
+def _combo_candidates(assessment, cfg: dict, planner: dict,
+                      limit: int = 2) -> list[MethodSpec]:
+    """按噪声类型给出少量、可解释的组合候选。
+
+    “具体组合具体分析”在阶段三先落成可审计的规则表：先压主噪声，
+    再用第二种方法处理残余；不在第一轮就穷举所有排列。
+    """
+    if planner.get("combos", True) is False or limit <= 0:
+        return []
+    allow_cnn = planner.get("allow_cnn", cfg.get("allow_cnn", True)) is not False
+    ranked = _noise_rank(assessment, planner)
+    top = [c for c, _s, _o in ranked]
+    top = top[:2]
+
+    raw: list[tuple[list[str], str]] = []
+
+    def add(keys: list[str], why: str) -> None:
+        if len(keys) < 2 or len(set(keys)) != len(keys):
+            return
+        if not allow_cnn and "cnn" in keys:
+            return
+        if all(k in _DEFAULT_PARAMS for k in keys):
+            raw.append((keys, why))
+
+    # 主噪声 + 残余噪声：用规则表的前两个方法
+    for canon in top:
+        rules = _NOISE_RULES.get(canon, [])
+        if len(rules) >= 2:
+            add([rules[0], rules[1]],
+                f"主噪声为{canon}，先用{rules[0]}压制，再用{rules[1]}处理残余")
+        if len(rules) >= 3 and allow_cnn and rules[2] == "cnn":
+            add([rules[0], "cnn"],
+                f"主噪声为{canon}，先做{rules[0]}，再用 CNN 分离残余")
+
+    # 组合层面的经验搭配：先保守预滤波，再上强方法
+    if any(c in top for c in ("面波", "折射波")):
+        add(["bandpass", "fk"], "先带通压制低频强能量，再做 FK 视速度滤波，降低单一 FK 的边界伪影")
+        add(["despike", "bandpass"], "先去孤立尖峰，再带通压制面波，避免尖峰被后续滤波抹成条带")
+    if "散射绕射" in top:
+        add(["fk", "svd"], "FK 先压低速强能量，再用 SVD 处理残余散射/绕射")
+        add(["median", "svd"], "中值先压横向不连续，再用 SVD 提取相干残余")
+    if "折射波" in top:
+        add(["fk", "median"], "FK 压低速面波，中值进一步压制折射残余")
+    if "随机噪声" in top:
+        add(["despike", "fx_decon"], "先去尖峰，再用 F-X 预测压制随机噪声")
+        add(["bandpass", "fx_decon"], "带通收窄频带后再做 F-X，减少高频噪声对预测的干扰")
+    if "工频干扰" in top:
+        add(["notch", "bandpass"], "先陷波去工频，再带通清理残余窄带")
+    if not raw:
+        add(["bandpass", "median"], "未识别出明确噪声，保守带通 + 中值兜底")
+
+    out: list[MethodSpec] = []
+    seen: set[str] = set()
+    for keys, why in raw:
+        spec = _combo_spec(keys, cfg, why, source="combo")
+        fp = _freeze({"key": spec.key, "params": spec.params})
+        if fp in seen:
+            continue
+        seen.add(fp)
+        spec.priority = len(out)
+        out.append(spec)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _noise_rank(assessment, planner: dict) -> list[tuple[str, float, list[str]]]:
     """返回 [(标准噪声名, 评分, 原始名列表)]，按评分降序。"""
     raw = getattr(assessment, "noise_types", None) or {}
@@ -298,6 +387,14 @@ def plan(assessment, cfg: dict | None = None) -> list[MethodSpec]:
             priority=i,
             source="rule",
         ))
+
+    # 阶段三：在单方法之后追加“链式组合”候选；具体组合由噪声类型决定。
+    combo_limit = int(planner.get("max_combos", 2) or 0)
+    if combo_limit > 0:
+        for j, combo in enumerate(_combo_candidates(assessment, cfg, planner, combo_limit)):
+            combo.priority = len(specs)
+            combo.strength = round(max(0.4, 0.9 - 0.05 * j), 2)
+            specs.append(combo)
     return specs
 
 
@@ -524,7 +621,9 @@ def refine(assessment, history: list, cfg: dict | None = None) -> list[MethodSpe
         candidates.append(spec)
 
     # ---- 1) 全新方法：用 plan 的规则顺序，但排除已试过/已通过的 key ----
-    base = plan(assessment, cfg)
+    # 组合候选只在首轮 plan() 里给，refine 专注“单方法新方案 + 调参重试”，
+    # 避免把首轮已经跑过的组合再次塞进重试队列。
+    base = [s for s in plan(assessment, cfg) if s.key != "combo"]
     for spec in base:
         if spec.key in tried_keys:
             continue
